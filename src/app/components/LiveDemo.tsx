@@ -1,738 +1,596 @@
-import { useState } from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/app/components/ui/card';
-import { Badge } from '@/app/components/ui/badge';
-import { Button } from '@/app/components/ui/button';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/app/components/ui/tabs';
-import { Progress } from '@/app/components/ui/progress';
-import { Input } from '@/app/components/ui/input';
-import { Textarea } from '@/app/components/ui/textarea';
-import { Label } from '@/app/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/app/components/ui/select';
-import { 
-  TrendingUp, 
-  TrendingDown, 
-  AlertCircle, 
-  CheckCircle2, 
-  FileText, 
-  Upload,
-  Download,
-  Calculator,
-  BarChart3,
-  Zap,
-  Shield
-} from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { supabase } from '../lib/supabase'; 
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from './ui/card';
+import { Badge } from './ui/badge';
+import { Button } from './ui/button';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
+import { Input } from './ui/input';
+import { Label } from './ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
+import { Loader2, Upload, CheckCircle2, Shield, ExternalLink, XCircle, BarChart3, Save, FileText, ChevronDown } from 'lucide-react';
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from './ui/accordion';
+
+// LISTA COMPLETA STANDARD ESRS
+const ESRS_STANDARDS = [
+  { code: 'ESRS 2', name: 'General Disclosures' },
+  { code: 'ESRS E1', name: 'Climate Change' },
+  { code: 'ESRS E2', name: 'Pollution' },
+  { code: 'ESRS E3', name: 'Water and marine resources' },
+  { code: 'ESRS E4', name: 'Biodiversity and ecosystems' },
+  { code: 'ESRS E5', name: 'Resource use and circular economy' },
+  { code: 'ESRS S1', name: 'Own workforce' },
+  { code: 'ESRS S2', name: 'Workers in the value chain' },
+  { code: 'ESRS S3', name: 'Affected communities' },
+  { code: 'ESRS S4', name: 'Consumers and end-users' },
+  { code: 'ESRS G1', name: 'Business conduct' }
+];
+
+// Funzione helper per normalizzare i codici standard per il database
+// Converte "ESRS E1" -> "E1", "ESRS-E1" -> "E1", "ESRS S1" -> "S1", ma lascia "ESRS 2" -> "ESRS 2"
+const normalizeStandardCode = (code: string): string => {
+  if (!code) {
+    return code || '';
+  }
+  
+  const trimmed = code.trim();
+  
+  // "ESRS 2" rimane "ESRS 2" (gestisce anche "ESRS-2", "ESRS2", "2")
+  if (trimmed === 'ESRS 2' || trimmed === 'ESRS-2' || trimmed === 'ESRS2' || trimmed === '2') {
+    return 'ESRS 2';
+  }
+  
+  // Rimuovi "ESRS " o "ESRS-" dall'inizio e restituisci il resto
+  // Gestisce: "ESRS E1", "ESRS-E1", "ESRS E1", ecc.
+  const normalized = trimmed.replace(/^ESRS[\s-]+/i, '').trim();
+  
+  return normalized || trimmed; // Fallback al codice originale se la normalizzazione fallisce
+};
 
 export function LiveDemo() {
-  const [dmaE1Impact, setDmaE1Impact] = useState('4.5');
-  const [dmaE1Financial, setDmaE1Financial] = useState('3.8');
-  const [scope1Value, setScope1Value] = useState('12543.67');
-  const [employeeCount, setEmployeeCount] = useState('850');
-
-  // Calculate if material (threshold = 3.0)
-  const isE1Material = parseFloat(dmaE1Impact) >= 3.0 || parseFloat(dmaE1Financial) >= 3.0;
+  console.log("🎬 LiveDemo componente renderizzato!");
   
-  // Mock data for demonstration
-  const mockCompany = {
-    name: 'Acme Manufacturing GmbH',
-    lei: 'LEI123456789ABCDEFGH',
-    nace: '25.11',
-    fiscalYearEnd: '2024-12-31',
+  // --- STATI DEL SISTEMA ---
+  const [isLoading, setIsLoading] = useState(true);
+  
+  // 1. Stati per Materialità
+  const [selectedStandard, setSelectedStandard] = useState('ESRS E1');
+  const [impactScore, setImpactScore] = useState('');
+  const [financialScore, setFinancialScore] = useState('');
+  
+  // 2. Stati per Data Collection (Catalogo)
+  const [materialStandards, setMaterialStandards] = useState<any[]>([]);
+  const [activeDatapoints, setActiveDatapoints] = useState<any[]>([]);
+  const [selectedDP, setSelectedDP] = useState<any>(null);
+  const [currentValue, setCurrentValue] = useState('');
+  
+  // 3. Stati per Audit & Upload
+  const [dbDataPoints, setDbDataPoints] = useState<any[]>([]); 
+  const [isSaving, setIsSaving] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadedFileUrl, setUploadedFileUrl] = useState<string | null>(null);
+
+  // --- CARICAMENTO DATI INIZIALE ---
+  const loadAllData = async () => {
+    console.log("🚀 loadAllData chiamata");
+    setIsLoading(true);
+    try {
+      console.log("📡 Recupero standard materiali dal database...");
+      // A. Recupera standard materiali
+      const { data: matData, error: matError } = await supabase
+        .from('materiality_assessment')
+        .select('*')
+        .eq('is_material', true)
+        .order('last_updated', { ascending: false });
+        
+      if (matError) {
+        console.error("❌ Errore recupero materialità:", matError);
+        alert(`Errore nel recupero dei dati: ${matError.message}`);
+        throw matError;
+      }
+      
+      console.log("✅ Dati materialità ricevuti:", matData);
+      console.log("Numero di record:", matData?.length || 0);
+        
+      // Filtro unicità lato client
+      const uniqueStandards = matData ? Array.from(new Map(matData.map(item => [item.standard_code, item])).values()) : [];
+      console.log("Standard unici dopo filtro:", uniqueStandards);
+      setMaterialStandards(uniqueStandards);
+
+      if (uniqueStandards.length > 0) {
+        console.log("=== 🔍 DEBUG MATERIALITÀ ===");
+        console.log("📋 Standard materiali trovati (originali dal DB):", uniqueStandards.map(m => m.standard_code));
+        
+        // Normalizza i codici standard per il matching con il catalogo
+        // Il catalogo usa "E1", "S1", "ESRS 2", quindi normalizziamo i codici
+        // I codici nel DB materiality_assessment sono "ESRS-E1", "ESRS-S1", ecc.
+        const codes = uniqueStandards.map(m => {
+          const originalCode = m.standard_code;
+          const normalized = normalizeStandardCode(originalCode);
+          console.log(`  🔄 Normalizzazione: "${originalCode}" -> "${normalized}"`);
+          return normalized;
+        });
+        
+        console.log("✅ Standard materiali normalizzati per catalogo:", codes);
+        console.log("📝 Nota: Il catalogo usa formato 'E1', 'S1', 'ESRS 2'");
+        
+        // DEBUG: Verifica quali codici sono effettivamente nel catalogo
+        console.log("🔎 Verifico codici disponibili nel catalogo...");
+        const { data: sampleCatalog, error: sampleError } = await supabase
+          .from('esrs_catalog')
+          .select('standard_code')
+          .limit(200);
+          
+        if (sampleError) {
+          console.error("❌ Errore nel recupero campione catalogo:", sampleError);
+        } else if (sampleCatalog) {
+          const uniqueCatalogCodes = Array.from(new Set(sampleCatalog.map((item: any) => item.standard_code).filter(Boolean)));
+          console.log("📊 Codici standard UNICI presenti nel catalogo:", uniqueCatalogCodes);
+          console.log("📊 Numero di codici unici:", uniqueCatalogCodes.length);
+          
+          // Verifica se i codici normalizzati corrispondono
+          const matchingCodes = codes.filter(c => uniqueCatalogCodes.includes(c));
+          const missingCodes = codes.filter(c => !uniqueCatalogCodes.includes(c));
+          console.log("✅ Codici che corrispondono:", matchingCodes);
+          if (missingCodes.length > 0) {
+            console.warn("⚠️ Codici che NON corrispondono:", missingCodes);
+          }
+        }
+        
+        // B. Recupera catalogo con codici normalizzati
+        console.log("🔍 Cercando nel catalogo con codici:", codes);
+        const { data: catData, error: catError } = await supabase
+          .from('esrs_catalog')
+          .select('*')
+          .in('standard_code', codes)
+          .order('datapoint_code', { ascending: true });
+          
+        if (catError) {
+          console.error("❌ Errore recupero catalogo:", catError);
+          console.error("Dettagli errore:", JSON.stringify(catError, null, 2));
+          alert(`Errore nel recupero del catalogo: ${catError.message}`);
+        } else {
+          console.log(`✅ Trovati ${catData?.length || 0} datapoint nel catalogo`);
+          if (catData && catData.length > 0) {
+            // Raggruppa per standard_code per vedere la distribuzione
+            const byStandard = catData.reduce((acc: any, dp: any) => {
+              acc[dp.standard_code] = (acc[dp.standard_code] || 0) + 1;
+              return acc;
+            }, {});
+            console.log("📊 Distribuzione datapoint per standard:", byStandard);
+            console.log("📄 Esempio di datapoint trovato:", catData[0]);
+          } else {
+            console.warn("⚠️⚠️⚠️ NESSUN DATAPOINT TROVATO! ⚠️⚠️⚠️");
+            console.warn("Codici cercati:", codes);
+            console.warn("Verifica che i codici nel catalogo corrispondano esattamente");
+          }
+        }
+        
+        setActiveDatapoints(catData || []);
+      } else {
+        console.log("ℹ️ Nessuno standard materiale trovato nel database");
+        setActiveDatapoints([]);
+      }
+
+      // C. Recupera storico Audit
+      const { data: auditData, error: auditError } = await supabase
+        .from('esrs_data_points')
+        .select('*')
+        .order('updated_at', { ascending: false });
+        
+      if (auditError) {
+        console.error("Errore recupero audit:", auditError);
+      }
+      
+      setDbDataPoints(auditData || []);
+
+    } catch (err: any) {
+      console.error("Errore caricamento:", err.message);
+      alert(`Errore nel caricamento dei dati: ${err.message}`);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
-  const mockMaterialityScores = [
-    { standard: 'ESRS-E1', topic: 'Climate Change', impact: 4.5, financial: 3.8, isMaterial: true },
-    { standard: 'ESRS-E2', topic: 'Pollution', impact: 2.1, financial: 1.8, isMaterial: false },
-    { standard: 'ESRS-E3', topic: 'Water & Marine', impact: 3.2, financial: 2.5, isMaterial: true },
-    { standard: 'ESRS-S1', topic: 'Own Workforce', impact: 3.8, financial: 3.1, isMaterial: true },
-    { standard: 'ESRS-S2', topic: 'Value Chain Workers', impact: 2.4, financial: 2.0, isMaterial: false },
-    { standard: 'ESRS-G1', topic: 'Business Conduct', impact: 3.5, financial: 3.2, isMaterial: true },
-  ];
+  useEffect(() => { 
+    console.log("⚡ useEffect eseguito, chiamo loadAllData");
+    loadAllData(); 
+  }, []);
 
-  const mockDataPoints = [
-    { 
-      code: 'E1-1', 
-      label: 'Transition plan for climate change mitigation', 
-      type: 'Narrative', 
-      status: 'Complete',
-      value: 'Our company has committed to achieving net-zero emissions by 2050...'
-    },
-    { 
-      code: 'E1-6', 
-      label: 'Gross Scope 1 GHG emissions (tCO2e)', 
-      type: 'Numeric', 
-      status: 'Complete',
-      value: '12,543.67',
-      evidence: 2
-    },
-    { 
-      code: 'E1-6', 
-      label: 'Gross Scope 2 GHG emissions (tCO2e)', 
-      type: 'Numeric', 
-      status: 'In Progress',
-      value: '—',
-      evidence: 0
-    },
-    { 
-      code: 'S1-1', 
-      label: 'Policies related to own workforce', 
-      type: 'Narrative', 
-      status: 'Complete',
-      value: 'We maintain comprehensive employment policies covering...'
-    },
-    { 
-      code: 'S1-6', 
-      label: 'Total number of employees (FTE)', 
-      type: 'Numeric', 
-      status: 'Complete',
-      value: '850',
-      evidence: 1
-    },
-  ];
+  // --- FUNZIONI OPERATIVE ---
 
-  const completionRate = Math.round((mockDataPoints.filter(dp => dp.status === 'Complete').length / mockDataPoints.length) * 100);
+  // 1. Salva Analisi Materialità
+  const saveMateriality = async () => {
+    setIsSaving(true);
+    try {
+      const imp = parseFloat(impactScore);
+      const fin = parseFloat(financialScore);
+      
+      // Valida i punteggi
+      if (isNaN(imp) || isNaN(fin) || imp < 0 || imp > 5 || fin < 0 || fin > 5) {
+        alert('I punteggi devono essere numeri tra 0 e 5');
+        setIsSaving(false);
+        return;
+      }
+      
+      // Trova il nome corretto del topic
+      const stdObj = ESRS_STANDARDS.find(s => s.code === selectedStandard);
+      const topicName = stdObj ? stdObj.name : 'General';
+
+      // Determina se lo standard è materiale (se uno dei due punteggi è >= 3.0)
+      const isMaterial = imp >= 3.0 || fin >= 3.0;
+
+      // Normalizza il codice standard per il database (E1, S1, ecc. invece di ESRS E1, ESRS S1)
+      const normalizedCode = normalizeStandardCode(selectedStandard);
+
+      const { error } = await supabase.from('materiality_assessment').insert([{ 
+        standard_code: normalizedCode, // Usa il codice normalizzato
+        topic_name: topicName,
+        impact_score: imp, 
+        financial_score: fin,
+        is_material: isMaterial,
+        last_updated: new Date().toISOString()
+      }]);
+
+      if (error) throw error;
+      
+      // Reset form
+      setImpactScore('');
+      setFinancialScore('');
+      
+      alert(`Analisi salvata per ${selectedStandard}! ${isMaterial ? 'Lo standard è stato marcato come materiale.' : 'Lo standard non è materiale (nessun punteggio ≥ 3.0).'}`);
+      loadAllData(); 
+    } catch (err: any) {
+      alert(`Errore: ${err.message}`);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  // 2. Upload File
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setIsUploading(true);
+    try {
+      const fileName = `${Date.now()}-${file.name}`;
+      const { error } = await supabase.storage.from('evidenze-esrs').upload(fileName, file);
+      if (error) throw error;
+      const { data: { publicUrl } } = supabase.storage.from('evidenze-esrs').getPublicUrl(fileName);
+      setUploadedFileUrl(publicUrl);
+    } catch (err: any) {
+      alert(`Errore upload: ${err.message}`);
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  // 3. Salva Dato nel Registro
+  const saveDatapointEntry = async () => {
+    if (!selectedDP || !currentValue) return;
+    setIsSaving(true);
+    try {
+      const { error } = await supabase.from('esrs_data_points').insert([{ 
+        code: selectedDP.datapoint_code, 
+        label: selectedDP.label,
+        value: currentValue, 
+        status: 'In Progress',
+        evidence_url: uploadedFileUrl,
+        catalog_id: selectedDP.id 
+      }]);
+      if (error) throw error;
+      
+      alert("Dato salvato!");
+      setCurrentValue('');
+      setUploadedFileUrl(null);
+      setSelectedDP(null); 
+      loadAllData();
+    } catch (err: any) {
+      alert(`Errore: ${err.message}`);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  // 4. Aggiorna Stato (Audit)
+  const updateAuditStatus = async (id: string, newStatus: string) => {
+    try {
+      const { error } = await supabase.from('esrs_data_points').update({ status: newStatus }).eq('id', id);
+      if (error) throw error;
+      setDbDataPoints(prev => prev.map(item => item.id === id ? { ...item, status: newStatus } : item));
+    } catch (err: any) {
+      alert(err.message);
+    }
+  };
+
+  if (isLoading) return <div className="flex justify-center p-20"><Loader2 className="animate-spin h-10 w-10 text-blue-600" /></div>;
 
   return (
     <div className="space-y-6">
-      {/* Demo Introduction */}
-      <Card className="border-green-200 bg-green-50">
-        <CardHeader>
-          <CardTitle className="text-xl text-green-900 flex items-center gap-2">
-            <Zap className="h-6 w-6" />
-            Interactive Platform Demo
-          </CardTitle>
-          <CardDescription className="text-green-700">
-            Experience the ESRS compliance workflow with live data interactions
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="bg-white p-4 rounded-md border border-green-200">
-            <p className="text-sm text-slate-700 mb-2">
-              <strong>Demo Company:</strong> {mockCompany.name}
-            </p>
-            <div className="grid md:grid-cols-3 gap-2 text-xs text-slate-600">
-              <div><span className="font-medium">LEI:</span> {mockCompany.lei}</div>
-              <div><span className="font-medium">NACE Code:</span> {mockCompany.nace} (Metal structures)</div>
-              <div><span className="font-medium">FY End:</span> {mockCompany.fiscalYearEnd}</div>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-2xl font-bold tracking-tight">ESRS Compliance Platform</h2>
+          <p className="text-slate-500">Gestione integrata Materialità, Raccolta Dati e Audit.</p>
+        </div>
+      </div>
 
-      {/* Interactive Tabs */}
-      <Tabs defaultValue="dashboard" className="w-full">
-        <TabsList className="grid w-full grid-cols-5">
-          <TabsTrigger value="dashboard">Dashboard</TabsTrigger>
-          <TabsTrigger value="dma">DMA Matrix</TabsTrigger>
-          <TabsTrigger value="collection">Data Collection</TabsTrigger>
-          <TabsTrigger value="calculation">Calculations</TabsTrigger>
-          <TabsTrigger value="export">Export</TabsTrigger>
+      {/* KPI CARDS */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <Card className="bg-slate-50">
+          <CardContent className="pt-6">
+            <div className="text-2xl font-bold">{materialStandards.length}</div>
+            <p className="text-xs text-slate-500 uppercase font-bold">Standard Materiali</p>
+          </CardContent>
+        </Card>
+        <Card className="bg-blue-50 border-blue-100">
+          <CardContent className="pt-6">
+            <div className="text-2xl font-bold text-blue-700">{activeDatapoints.length}</div>
+            <p className="text-xs text-blue-600 uppercase font-bold">Requisiti Attivi</p>
+          </CardContent>
+        </Card>
+        <Card className="bg-green-50 border-green-100">
+          <CardContent className="pt-6">
+            <div className="text-2xl font-bold text-green-700">
+              {dbDataPoints.filter(d => d.status === 'Approved').length}
+            </div>
+            <p className="text-xs text-green-600 uppercase font-bold">Dati Approvati</p>
+          </CardContent>
+        </Card>
+      </div>
+
+      <Tabs defaultValue="materiality" className="space-y-4">
+        <TabsList>
+          <TabsTrigger value="materiality">1. Analisi Materialità</TabsTrigger>
+          <TabsTrigger value="collection">2. Data Collection</TabsTrigger>
+          <TabsTrigger value="audit">3. Review & Audit</TabsTrigger>
         </TabsList>
 
-        {/* Dashboard */}
-        <TabsContent value="dashboard" className="space-y-4">
-          <div className="grid md:grid-cols-3 gap-4">
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-sm">Overall Completion</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="flex items-end gap-2">
-                  <span className="text-3xl font-bold text-slate-900">{completionRate}%</span>
-                  <TrendingUp className="h-5 w-5 text-green-600 mb-1" />
-                </div>
-                <Progress value={completionRate} className="mt-2" />
-                <p className="text-xs text-slate-600 mt-2">
-                  {mockDataPoints.filter(dp => dp.status === 'Complete').length} of {mockDataPoints.length} data points complete
-                </p>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-sm">Material Topics</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="flex items-end gap-2">
-                  <span className="text-3xl font-bold text-slate-900">
-                    {mockMaterialityScores.filter(s => s.isMaterial).length}
-                  </span>
-                  <span className="text-sm text-slate-600 mb-1">of 6 assessed</span>
-                </div>
-                <div className="mt-3 flex gap-1">
-                  {mockMaterialityScores.map((score, idx) => (
-                    <div
-                      key={idx}
-                      className={`h-2 flex-1 rounded ${score.isMaterial ? 'bg-green-500' : 'bg-slate-200'}`}
-                    />
-                  ))}
-                </div>
-                <p className="text-xs text-slate-600 mt-2">DMA approved on Jan 15, 2024</p>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-sm">Evidence Documents</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="flex items-end gap-2">
-                  <span className="text-3xl font-bold text-slate-900">47</span>
-                  <span className="text-sm text-slate-600 mb-1">files uploaded</span>
-                </div>
-                <div className="mt-3 space-y-1 text-xs text-slate-600">
-                  <div className="flex justify-between">
-                    <span>PDFs:</span>
-                    <span className="font-medium">32</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Excel:</span>
-                    <span className="font-medium">12</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Other:</span>
-                    <span className="font-medium">3</span>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-
-          {/* Recent Activity */}
+        {/* TAB 1: ANALISI MATERIALITÀ */}
+        <TabsContent value="materiality">
           <Card>
             <CardHeader>
-              <CardTitle className="text-sm">Recent Activity</CardTitle>
+              <CardTitle>Valutazione Doppia Materialità</CardTitle>
+              <CardDescription>Definisci la soglia per attivare gli standard.</CardDescription>
             </CardHeader>
-            <CardContent>
-              <div className="space-y-3">
-                {[
-                  { action: 'Data point updated', detail: 'E1-6: Scope 1 GHG emissions', user: 'Sarah Chen', time: '2 hours ago', icon: CheckCircle2, color: 'green' },
-                  { action: 'Evidence uploaded', detail: 'Utility bill Q4 2024.pdf', user: 'Michael Torres', time: '5 hours ago', icon: Upload, color: 'blue' },
-                  { action: 'Calculation completed', detail: 'Gender pay gap analysis', user: 'System', time: '1 day ago', icon: Calculator, color: 'purple' },
-                  { action: 'Review requested', detail: 'S1-1: Workforce policies', user: 'Emma Wilson', time: '2 days ago', icon: AlertCircle, color: 'orange' },
-                ].map((activity, idx) => (
-                  <div key={idx} className="flex items-start gap-3 pb-3 border-b border-slate-100 last:border-0">
-                    <activity.icon className={`h-5 w-5 text-${activity.color}-600 shrink-0 mt-0.5`} />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-slate-900">{activity.action}</p>
-                      <p className="text-xs text-slate-600 truncate">{activity.detail}</p>
-                    </div>
-                    <div className="text-right shrink-0">
-                      <p className="text-xs text-slate-500">{activity.user}</p>
-                      <p className="text-xs text-slate-400">{activity.time}</p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* DMA Matrix */}
-        <TabsContent value="dma" className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>Double Materiality Assessment Matrix</CardTitle>
-              <CardDescription>Interactive visualization of materiality scores (threshold: 3.0)</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-slate-200 bg-slate-50">
-                      <th className="text-left p-3 font-medium">Standard</th>
-                      <th className="text-left p-3 font-medium">Topic</th>
-                      <th className="text-center p-3 font-medium">Impact Materiality</th>
-                      <th className="text-center p-3 font-medium">Financial Materiality</th>
-                      <th className="text-center p-3 font-medium">Material?</th>
-                      <th className="text-center p-3 font-medium">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {mockMaterialityScores.map((score, idx) => (
-                      <tr key={idx} className="border-b border-slate-100">
-                        <td className="p-3">
-                          <Badge variant="outline" className="font-mono text-xs">
-                            {score.standard}
-                          </Badge>
-                        </td>
-                        <td className="p-3">{score.topic}</td>
-                        <td className="p-3 text-center">
-                          <div className="inline-flex items-center gap-2">
-                            <div className="w-16 bg-slate-200 rounded-full h-2">
-                              <div
-                                className={`h-2 rounded-full ${score.impact >= 3.0 ? 'bg-green-500' : 'bg-slate-400'}`}
-                                style={{ width: `${(score.impact / 5) * 100}%` }}
-                              />
-                            </div>
-                            <span className="font-medium">{score.impact}</span>
-                          </div>
-                        </td>
-                        <td className="p-3 text-center">
-                          <div className="inline-flex items-center gap-2">
-                            <div className="w-16 bg-slate-200 rounded-full h-2">
-                              <div
-                                className={`h-2 rounded-full ${score.financial >= 3.0 ? 'bg-blue-500' : 'bg-slate-400'}`}
-                                style={{ width: `${(score.financial / 5) * 100}%` }}
-                              />
-                            </div>
-                            <span className="font-medium">{score.financial}</span>
-                          </div>
-                        </td>
-                        <td className="p-3 text-center">
-                          {score.isMaterial ? (
-                            <Badge className="bg-green-600 text-white">Yes</Badge>
-                          ) : (
-                            <Badge variant="outline" className="text-slate-600">No</Badge>
-                          )}
-                        </td>
-                        <td className="p-3 text-center">
-                          {score.isMaterial && (
-                            <Badge variant="secondary" className="bg-blue-100 text-blue-900 text-xs">
-                              Report Required
-                            </Badge>
-                          )}
-                        </td>
-                      </tr>
+            <CardContent className="space-y-4 max-w-md">
+              <div className="space-y-2">
+                <Label>Seleziona Standard ESRS</Label>
+                {/* FIX: Aggiunto bg-white e z-50 per evitare trasparenze e sovrapposizioni.
+                  Il SelectContent ora ha uno sfondo solido.
+                */}
+                <Select onValueChange={setSelectedStandard} defaultValue={selectedStandard}>
+                  <SelectTrigger className="bg-white"><SelectValue placeholder="Scegli standard" /></SelectTrigger>
+                  <SelectContent className="bg-white border shadow-lg max-h-60 overflow-y-auto z-50">
+                    {ESRS_STANDARDS.map(std => (
+                      <SelectItem key={std.code} value={std.code} className="hover:bg-slate-50 cursor-pointer">
+                        <span className="font-bold mr-2">{std.code}</span> - {std.name}
+                      </SelectItem>
                     ))}
-                  </tbody>
-                </table>
+                  </SelectContent>
+                </Select>
               </div>
-
-              {/* Interactive Example */}
-              <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-md">
-                <h4 className="font-medium text-sm text-blue-900 mb-3">Try It: Adjust ESRS-E1 Scores</h4>
-                <div className="grid md:grid-cols-2 gap-4">
-                  <div>
-                    <Label className="text-xs">Impact Materiality (0-5)</Label>
-                    <Input
-                      type="number"
-                      min="0"
-                      max="5"
-                      step="0.1"
-                      value={dmaE1Impact}
-                      onChange={(e) => setDmaE1Impact(e.target.value)}
-                      className="mt-1"
-                    />
-                  </div>
-                  <div>
-                    <Label className="text-xs">Financial Materiality (0-5)</Label>
-                    <Input
-                      type="number"
-                      min="0"
-                      max="5"
-                      step="0.1"
-                      value={dmaE1Financial}
-                      onChange={(e) => setDmaE1Financial(e.target.value)}
-                      className="mt-1"
-                    />
-                  </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Impatto (0-5)</Label>
+                  <Input type="number" value={impactScore} onChange={e => setImpactScore(e.target.value)} placeholder="Es. 4.5" />
                 </div>
-                <div className="mt-3 p-3 bg-white rounded border border-blue-200">
-                  <p className="text-sm">
-                    <strong>Result:</strong> ESRS-E1 is{' '}
-                    <span className={isE1Material ? 'text-green-600 font-bold' : 'text-red-600 font-bold'}>
-                      {isE1Material ? 'MATERIAL' : 'NOT MATERIAL'}
-                    </span>
-                    {' '}(threshold: 3.0)
-                  </p>
-                  <p className="text-xs text-slate-600 mt-1">
-                    {isE1Material 
-                      ? 'All E1 disclosure requirements must be reported.' 
-                      : 'E1 can be omitted, but justification must be provided in ESRS-2.'}
-                  </p>
+                <div className="space-y-2">
+                  <Label>Finanziario (0-5)</Label>
+                  <Input type="number" value={financialScore} onChange={e => setFinancialScore(e.target.value)} placeholder="Es. 3.0" />
                 </div>
               </div>
+              <Button onClick={saveMateriality} disabled={isSaving} className="w-full">
+                {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+                Salva Valutazione
+              </Button>
+              <p className="text-xs text-slate-400 mt-2">Nota: Se uno dei due punteggi è ≥ 3.0, lo standard diventa "Materiale".</p>
             </CardContent>
           </Card>
         </TabsContent>
 
-        {/* Data Collection */}
-        <TabsContent value="collection" className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>Data Point Collection Interface</CardTitle>
-              <CardDescription>Example: ESRS E1-6 (GHG Emissions)</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-4">
-                {/* Data Point Form */}
-                <div className="grid md:grid-cols-2 gap-4">
-                  <div>
-                    <Label htmlFor="scope1">Gross Scope 1 GHG emissions (tCO2e)</Label>
-                    <Input
-                      id="scope1"
-                      type="number"
-                      value={scope1Value}
-                      onChange={(e) => setScope1Value(e.target.value)}
-                      className="mt-1"
-                    />
-                    <p className="text-xs text-slate-500 mt-1">Direct emissions from owned/controlled sources</p>
-                  </div>
-
-                  <div>
-                    <Label htmlFor="period">Reporting Period</Label>
-                    <Select defaultValue="2024">
-                      <SelectTrigger id="period" className="mt-1">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="2024">2024</SelectItem>
-                        <SelectItem value="2023">2023</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
+        {/* TAB 2: DATA COLLECTION */}
+        <TabsContent value="collection">
+          {selectedDP ? (
+            <Card className="border-blue-500 shadow-md">
+              <CardHeader className="bg-blue-50 py-3">
+                <CardTitle className="text-sm flex justify-between items-center">
+                  <span>Inserimento: <span className="font-mono">{selectedDP.datapoint_code}</span></span>
+                  <Button variant="ghost" size="sm" onClick={() => setSelectedDP(null)}>Annulla</Button>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4 pt-4">
+                <div className="bg-slate-50 p-3 rounded text-xs text-slate-700 border mb-2">
+                  {selectedDP.label}
                 </div>
-
-                <div>
-                  <Label htmlFor="methodology">Calculation Methodology</Label>
-                  <Textarea
-                    id="methodology"
-                    className="mt-1"
-                    rows={3}
-                    defaultValue="Calculated using GHG Protocol Corporate Standard. Emission factors from UK DEFRA 2024. Includes natural gas (12,400 m³) and diesel fuel (8,200 liters)."
+                <div className="space-y-2">
+                  <Label>Valore ({selectedDP.data_type})</Label>
+                  <Input 
+                    value={currentValue} 
+                    onChange={(e) => setCurrentValue(e.target.value)} 
+                    placeholder="Inserisci il dato richiesto..." 
+                    className="font-medium"
                   />
                 </div>
-
-                {/* Evidence Upload */}
-                <div className="border border-dashed border-slate-300 rounded-md p-4 bg-slate-50">
-                  <div className="flex items-center gap-3">
-                    <Upload className="h-5 w-5 text-slate-400" />
-                    <div className="flex-1">
-                      <p className="text-sm font-medium text-slate-700">Evidence Documents</p>
-                      <p className="text-xs text-slate-500">Upload invoices, meter readings, or calculation sheets</p>
-                    </div>
-                    <Button size="sm" variant="outline">
-                      <Upload className="h-4 w-4 mr-2" />
-                      Upload
-                    </Button>
-                  </div>
-                  <div className="mt-3 space-y-2">
-                    {[
-                      { name: 'Natural_Gas_Invoice_Q4_2024.pdf', size: '2.4 MB', uploaded: '2024-01-15' },
-                      { name: 'Diesel_Fuel_Receipts_2024.xlsx', size: '1.1 MB', uploaded: '2024-01-14' },
-                    ].map((file, idx) => (
-                      <div key={idx} className="flex items-center justify-between bg-white p-2 rounded border border-slate-200">
-                        <div className="flex items-center gap-2">
-                          <FileText className="h-4 w-4 text-blue-600" />
-                          <div>
-                            <p className="text-xs font-medium text-slate-700">{file.name}</p>
-                            <p className="text-xs text-slate-500">{file.size} • {file.uploaded}</p>
-                          </div>
-                        </div>
-                        <CheckCircle2 className="h-4 w-4 text-green-600" />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="flex gap-2">
-                  <Button className="flex-1">
-                    <CheckCircle2 className="h-4 w-4 mr-2" />
-                    Save & Submit for Review
+                <div className="border-2 border-dashed border-slate-200 p-6 rounded text-center">
+                  <input type="file" id="file-upload" className="hidden" onChange={handleFileUpload} />
+                  <Button variant="outline" size="sm" onClick={() => document.getElementById('file-upload')?.click()}>
+                    {isUploading ? <Loader2 className="animate-spin mr-2" /> : <Upload className="mr-2 h-4 w-4" />} 
+                    Allega Evidenza PDF
                   </Button>
-                  <Button variant="outline">
-                    Save as Draft
-                  </Button>
+                  {uploadedFileUrl && <p className="text-xs text-green-600 mt-2 font-bold">File caricato con successo!</p>}
                 </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Data Points List */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-sm">All Data Points (Sample)</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-slate-200 bg-slate-50">
-                      <th className="text-left p-2 font-medium">Code</th>
-                      <th className="text-left p-2 font-medium">Label</th>
-                      <th className="text-center p-2 font-medium">Type</th>
-                      <th className="text-center p-2 font-medium">Status</th>
-                      <th className="text-center p-2 font-medium">Evidence</th>
-                    </tr>
-                  </thead>
-                  <tbody className="text-xs">
-                    {mockDataPoints.map((dp, idx) => (
-                      <tr key={idx} className="border-b border-slate-100">
-                        <td className="p-2">
-                          <Badge variant="outline" className="font-mono text-xs">{dp.code}</Badge>
-                        </td>
-                        <td className="p-2">{dp.label}</td>
-                        <td className="p-2 text-center">
-                          <Badge variant="secondary" className="text-xs">{dp.type}</Badge>
-                        </td>
-                        <td className="p-2 text-center">
-                          <Badge className={dp.status === 'Complete' ? 'bg-green-600 text-white' : 'bg-yellow-600 text-white'}>
-                            {dp.status}
-                          </Badge>
-                        </td>
-                        <td className="p-2 text-center">
-                          {dp.evidence ? (
-                            <span className="text-blue-600 font-medium">{dp.evidence} files</span>
-                          ) : (
-                            <span className="text-slate-400">—</span>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* Calculation Engine */}
-        <TabsContent value="calculation" className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Calculator className="h-5 w-5 text-purple-600" />
-                Calculation Engine Output
-              </CardTitle>
-              <CardDescription>Automated calculations for ESRS metrics</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {/* GHG Calculation */}
-              <div className="p-4 bg-purple-50 border border-purple-200 rounded-md">
-                <h4 className="font-medium text-sm text-purple-900 mb-3">GHG Scope 1 Calculation (ESRS E1)</h4>
-                <div className="space-y-2 text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-slate-600">Natural gas consumption:</span>
-                    <span className="font-mono">12,400 m³</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-600">Emission factor (DEFRA 2024):</span>
-                    <span className="font-mono">0.18405 kgCO2e/kWh</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-600">Diesel fuel:</span>
-                    <span className="font-mono">8,200 liters</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-600">Emission factor:</span>
-                    <span className="font-mono">2.68781 kgCO2e/liter</span>
-                  </div>
-                  <div className="border-t border-purple-300 pt-2 mt-2 flex justify-between font-bold text-purple-900">
-                    <span>Total Scope 1 Emissions:</span>
-                    <span className="font-mono">{scope1Value} tCO2e</span>
-                  </div>
-                </div>
-                <div className="mt-3 flex items-center gap-2 text-xs text-purple-700">
-                  <CheckCircle2 className="h-4 w-4" />
-                  <span>Calculation verified on 2024-01-15 14:32:18 UTC</span>
-                </div>
-              </div>
-
-              {/* Gender Pay Gap */}
-              <div className="p-4 bg-blue-50 border border-blue-200 rounded-md">
-                <h4 className="font-medium text-sm text-blue-900 mb-3">Gender Pay Gap Analysis (ESRS S1-16)</h4>
-                <div className="space-y-2 text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-slate-600">Male employees average salary:</span>
-                    <span className="font-mono">€52,800/year</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-600">Female employees average salary:</span>
-                    <span className="font-mono">€48,300/year</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-600">Formula:</span>
-                    <span className="font-mono text-xs">(Male - Female) / Male × 100</span>
-                  </div>
-                  <div className="border-t border-blue-300 pt-2 mt-2 flex justify-between font-bold text-blue-900">
-                    <span>Unadjusted Pay Gap:</span>
-                    <span className="font-mono text-orange-600">8.52%</span>
-                  </div>
-                </div>
-                <div className="mt-3 flex items-center gap-2 text-xs text-orange-600">
-                  <AlertCircle className="h-4 w-4" />
-                  <span>Above industry average (6.3%) - requires action plan disclosure</span>
-                </div>
-              </div>
-
-              {/* Employee Metrics */}
-              <div className="p-4 bg-green-50 border border-green-200 rounded-md">
-                <h4 className="font-medium text-sm text-green-900 mb-3">Employee Composition (ESRS S1-6)</h4>
-                <div className="grid md:grid-cols-2 gap-4 text-sm">
-                  <div>
-                    <p className="text-slate-600 mb-2">By Contract Type:</p>
-                    <div className="space-y-1">
-                      <div className="flex justify-between">
-                        <span>Permanent:</span>
-                        <span className="font-mono">{Math.round(parseInt(employeeCount) * 0.82)}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span>Temporary:</span>
-                        <span className="font-mono">{Math.round(parseInt(employeeCount) * 0.18)}</span>
-                      </div>
-                    </div>
-                  </div>
-                  <div>
-                    <p className="text-slate-600 mb-2">By Gender:</p>
-                    <div className="space-y-1">
-                      <div className="flex justify-between">
-                        <span>Male:</span>
-                        <span className="font-mono">{Math.round(parseInt(employeeCount) * 0.62)}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span>Female:</span>
-                        <span className="font-mono">{Math.round(parseInt(employeeCount) * 0.37)}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span>Non-binary:</span>
-                        <span className="font-mono">{Math.round(parseInt(employeeCount) * 0.01)}</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* Export */}
-        <TabsContent value="export" className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Download className="h-5 w-5 text-indigo-600" />
-                Report Generation & Export
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid md:grid-cols-2 gap-4">
-                {/* XBRL Export */}
-                <div className="border border-indigo-200 rounded-md p-4 bg-indigo-50">
-                  <h4 className="font-medium text-sm text-indigo-900 mb-3">XBRL Package (ESEF)</h4>
-                  <p className="text-xs text-slate-600 mb-4">
-                    Machine-readable format for regulatory submission to ESMA/national authorities
-                  </p>
-                  <div className="space-y-2 text-xs mb-4">
-                    <div className="flex justify-between">
-                      <span className="text-slate-600">Format:</span>
-                      <span className="font-medium">Inline XBRL (.html)</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-600">Taxonomy:</span>
-                      <span className="font-medium">ESEF 2024</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-600">Validation:</span>
-                      <Badge className="bg-green-600 text-white text-xs">Passed</Badge>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-600">File size:</span>
-                      <span className="font-medium">3.8 MB</span>
-                    </div>
-                  </div>
-                  <Button className="w-full bg-indigo-600 hover:bg-indigo-700">
-                    <Download className="h-4 w-4 mr-2" />
-                    Download XBRL ZIP
-                  </Button>
-                </div>
-
-                {/* PDF Export */}
-                <div className="border border-blue-200 rounded-md p-4 bg-blue-50">
-                  <h4 className="font-medium text-sm text-blue-900 mb-3">PDF Report (Human-Readable)</h4>
-                  <p className="text-xs text-slate-600 mb-4">
-                    Formatted sustainability statement for annual report inclusion
-                  </p>
-                  <div className="space-y-2 text-xs mb-4">
-                    <div className="flex justify-between">
-                      <span className="text-slate-600">Pages:</span>
-                      <span className="font-medium">124 pages</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-600">Format:</span>
-                      <span className="font-medium">PDF/A-3</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-600">Includes:</span>
-                      <span className="font-medium">Table of contents, charts</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-600">File size:</span>
-                      <span className="font-medium">8.2 MB</span>
-                    </div>
-                  </div>
-                  <Button className="w-full bg-blue-600 hover:bg-blue-700">
-                    <Download className="h-4 w-4 mr-2" />
-                    Download PDF
-                  </Button>
-                </div>
-              </div>
-
-              {/* Preview */}
-              <div className="border border-slate-200 rounded-md p-4 bg-slate-50">
-                <h4 className="font-medium text-sm text-slate-900 mb-3">Report Preview (Excerpt)</h4>
-                <div className="bg-white p-4 rounded border border-slate-200 text-xs leading-relaxed">
-                  <h5 className="font-bold text-sm mb-2">ESRS E1: Climate Change</h5>
-                  <p className="mb-2"><strong>E1-1: Transition Plan for Climate Change Mitigation</strong></p>
-                  <p className="text-slate-700 mb-3">
-                    Acme Manufacturing GmbH has committed to achieving net-zero Scope 1 and 2 GHG emissions by 2050, 
-                    with an intermediate target of 50% reduction by 2030 (baseline: 2020). Our transition plan includes...
-                  </p>
-                  <p className="mb-2"><strong>E1-6: Gross GHG Emissions (tCO2e)</strong></p>
-                  <table className="w-full border border-slate-200 text-xs">
-                    <thead>
-                      <tr className="bg-slate-100">
-                        <th className="border border-slate-200 p-2 text-left">Category</th>
-                        <th className="border border-slate-200 p-2 text-right">2024</th>
-                        <th className="border border-slate-200 p-2 text-right">2023</th>
-                        <th className="border border-slate-200 p-2 text-right">Change</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr>
-                        <td className="border border-slate-200 p-2">Scope 1</td>
-                        <td className="border border-slate-200 p-2 text-right font-mono">12,543.67</td>
-                        <td className="border border-slate-200 p-2 text-right font-mono">13,201.45</td>
-                        <td className="border border-slate-200 p-2 text-right text-green-600">-5.0% ↓</td>
-                      </tr>
-                      <tr>
-                        <td className="border border-slate-200 p-2">Scope 2 (location-based)</td>
-                        <td className="border border-slate-200 p-2 text-right font-mono">8,932.12</td>
-                        <td className="border border-slate-200 p-2 text-right font-mono">9,456.33</td>
-                        <td className="border border-slate-200 p-2 text-right text-green-600">-5.5% ↓</td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              {/* Audit Trail Package */}
-              <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-md">
-                <h4 className="font-medium text-sm text-yellow-900 mb-2 flex items-center gap-2">
-                  <Shield className="h-4 w-4" />
-                  Audit Trail Package
-                </h4>
-                <p className="text-xs text-yellow-800 mb-3">
-                  Complete audit trail including all evidence documents, calculation logs, and change history
-                </p>
-                <div className="grid md:grid-cols-3 gap-2 text-xs">
-                  <div className="bg-white p-2 rounded border border-yellow-300">
-                    <p className="font-medium">47 Evidence Files</p>
-                    <p className="text-slate-600">SHA-256 verified</p>
-                  </div>
-                  <div className="bg-white p-2 rounded border border-yellow-300">
-                    <p className="font-medium">1,847 Audit Log Entries</p>
-                    <p className="text-slate-600">Immutable records</p>
-                  </div>
-                  <div className="bg-white p-2 rounded border border-yellow-300">
-                    <p className="font-medium">12 Stakeholder Records</p>
-                    <p className="text-slate-600">DMA consultations</p>
-                  </div>
-                </div>
-                <Button variant="outline" className="w-full mt-3">
-                  <Download className="h-4 w-4 mr-2" />
-                  Export Audit Package (.zip)
+                <Button className="w-full bg-blue-700" onClick={saveDatapointEntry} disabled={isSaving || !currentValue}>
+                   Salva e Invia all'Auditor
                 </Button>
-              </div>
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="space-y-4">
+              {materialStandards.length === 0 ? (
+                <Card>
+                  <CardContent className="text-center py-10">
+                    <p className="text-slate-500 mb-2">Nessuno standard materiale trovato.</p>
+                    <p className="text-sm text-slate-400">Vai al Tab "Analisi Materialità" e completa l'analisi per almeno uno standard.</p>
+                    <p className="text-xs text-slate-400 mt-2">Uno standard diventa materiale quando il punteggio di Impatto o Finanziario è ≥ 3.0</p>
+                  </CardContent>
+                </Card>
+              ) : (
+                <Accordion type="multiple" className="w-full space-y-4">
+                  {materialStandards.map((std) => {
+                    // Normalizza il codice standard per il matching
+                    // Nel DB materiality_assessment: "ESRS-E1"
+                    // Nel catalogo esrs_catalog: "E1"
+                    const normalizedStdCode = normalizeStandardCode(std.standard_code);
+                    
+                    // Filtra i datapoint che corrispondono al codice normalizzato
+                    // I datapoint nel catalogo hanno già il codice nel formato "E1", "S1", ecc.
+                    const standardDatapoints = activeDatapoints.filter(dp => {
+                      if (!dp.standard_code) return false;
+                      // Normalizza anche il codice del datapoint (per sicurezza, anche se dovrebbe già essere "E1")
+                      const normalizedDpCode = normalizeStandardCode(dp.standard_code);
+                      return normalizedStdCode === normalizedDpCode;
+                    });
+                    
+                    // Trova il nome completo dello standard per la visualizzazione
+                    // Cerca nello standard che corrisponde al codice normalizzato
+                    const displayCode = ESRS_STANDARDS.find(s => 
+                      normalizeStandardCode(s.code) === normalizedStdCode
+                    )?.code || std.standard_code;
+                    
+                    return (
+                      <AccordionItem key={std.id || std.standard_code} value={std.standard_code} className="border rounded-lg">
+                        <AccordionTrigger className="px-6 py-4 hover:no-underline">
+                          <div className="flex items-center justify-between w-full pr-4">
+                            <div className="flex items-center gap-3">
+                              <BarChart3 className="h-5 w-5 text-blue-600" />
+                              <div className="text-left">
+                                <div className="font-bold text-lg">{displayCode}</div>
+                                <div className="text-sm text-slate-500 font-normal">{std.topic_name || 'Standard ESRS'}</div>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-4">
+                              <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">
+                                {standardDatapoints.length} datapoint{standardDatapoints.length !== 1 ? 's' : ''}
+                              </Badge>
+                              <ChevronDown className="h-4 w-4 text-slate-400 transition-transform duration-200" />
+                            </div>
+                          </div>
+                        </AccordionTrigger>
+                        <AccordionContent className="px-6 pb-4">
+                          {standardDatapoints.length === 0 ? (
+                            <div className="p-4 text-center text-amber-600 bg-amber-50 rounded border border-amber-200">
+                              <p className="text-sm font-medium mb-2">Nessun datapoint trovato per "{displayCode}"</p>
+                              <div className="text-xs text-amber-600 space-y-1 text-left bg-white p-3 rounded border border-amber-200 mt-2">
+                                <p className="font-semibold">Possibili cause:</p>
+                                <ul className="list-disc list-inside space-y-1 text-amber-500">
+                                  <li>Il catalogo <code className="bg-amber-100 px-1 rounded">esrs_catalog</code> non contiene dati per questo standard</li>
+                                  <li>Il codice nel database è "{normalizedStdCode}" - verifica che corrisponda ai codici nel catalogo</li>
+                                </ul>
+                                <p className="mt-2 text-amber-600">
+                                  <strong>Suggerimento:</strong> Apri la console del browser (F12) per vedere i log di debug.
+                                </p>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="space-y-2 mt-2">
+                              {standardDatapoints.map(dp => (
+                                <div 
+                                  key={dp.id} 
+                                  className="flex items-center justify-between p-4 border rounded-lg hover:bg-slate-50 transition-colors bg-white"
+                                >
+                                  <div className="space-y-2 flex-1">
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                      <Badge variant="outline" className="font-mono text-xs text-blue-700 bg-blue-50 border-blue-200">
+                                        {dp.datapoint_code}
+                                      </Badge>
+                                      {dp.is_voluntary && (
+                                        <Badge className="bg-amber-100 text-amber-700 border-none text-xs">
+                                          VOLONTARIO
+                                        </Badge>
+                                      )}
+                                      {dp.data_type && (
+                                        <Badge variant="outline" className="text-xs text-slate-600">
+                                          {dp.data_type}
+                                        </Badge>
+                                      )}
+                                    </div>
+                                    <p className="text-sm font-medium text-slate-700 leading-relaxed">
+                                      {dp.label}
+                                    </p>
+                                  </div>
+                                  <Button 
+                                    size="sm" 
+                                    variant="outline" 
+                                    onClick={() => setSelectedDP(dp)}
+                                    className="ml-4 shrink-0"
+                                  >
+                                    Inserisci
+                                  </Button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </AccordionContent>
+                      </AccordionItem>
+                    );
+                  })}
+                </Accordion>
+              )}
+            </div>
+          )}
+        </TabsContent>
+
+        {/* TAB 3: AUDIT & APPROVAZIONE */}
+        <TabsContent value="audit">
+          <Card>
+            <CardContent className="p-0 overflow-x-auto">
+              <table className="w-full text-xs text-left">
+                <thead className="bg-slate-50 border-b text-slate-500">
+                  <tr>
+                    <th className="p-3">Data</th>
+                    <th className="p-3">Codice</th>
+                    <th className="p-3">Valore Inserito</th>
+                    <th className="p-3">Evidenza</th>
+                    <th className="p-3">Stato</th>
+                    <th className="p-3 text-right">Azioni</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {dbDataPoints.length === 0 && <tr><td colSpan={6} className="p-4 text-center text-slate-400">Nessun dato in revisione.</td></tr>}
+                  {dbDataPoints.map(row => (
+                    <tr key={row.id} className="border-b hover:bg-slate-50">
+                      <td className="p-3 text-slate-400">{new Date(row.updated_at).toLocaleDateString()}</td>
+                      <td className="p-3 font-bold font-mono text-blue-700">{row.code}</td>
+                      <td className="p-3 font-medium">{row.value}</td>
+                      <td className="p-3">
+                        {row.evidence_url ? (
+                          <Button variant="ghost" size="sm" className="h-6 text-blue-600" onClick={() => window.open(row.evidence_url, '_blank')}>
+                            <ExternalLink className="h-3 w-3 mr-1"/> PDF
+                          </Button>
+                        ) : <span className="text-slate-300">-</span>}
+                      </td>
+                      <td className="p-3">
+                        <Badge className={
+                          row.status === 'Approved' ? 'bg-green-100 text-green-700 border-none' : 
+                          row.status === 'Rejected' ? 'bg-red-100 text-red-700 border-none' : 
+                          'bg-orange-100 text-orange-700 border-none'
+                        }>
+                          {row.status}
+                        </Badge>
+                      </td>
+                      <td className="p-3 text-right">
+                        <div className="flex justify-end gap-1">
+                          <Button variant="outline" size="sm" className="h-7 w-7 p-0 border-green-200 text-green-600 hover:bg-green-50" onClick={() => updateAuditStatus(row.id, 'Approved')}>
+                            <CheckCircle2 className="h-4 w-4"/>
+                          </Button>
+                          <Button variant="outline" size="sm" className="h-7 w-7 p-0 border-red-200 text-red-600 hover:bg-red-50" onClick={() => updateAuditStatus(row.id, 'Rejected')}>
+                            <XCircle className="h-4 w-4"/>
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </CardContent>
           </Card>
         </TabsContent>

@@ -1,14 +1,16 @@
-import { useState } from 'react';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/app/components/ui/tabs';
-import { ArchitectureOverview } from '@/app/components/ArchitectureOverview';
-import { DatabaseSchema } from '@/app/components/DatabaseSchema';
-import { UserJourney } from '@/app/components/UserJourney';
-import { APIStrategy } from '@/app/components/APIStrategy';
-import { LiveDemo } from '@/app/components/LiveDemo';
+import React, { useState } from 'react';
+// Importiamo i componenti usando percorsi relativi (../ e ./)
+import { Tabs, TabsContent, TabsList, TabsTrigger } from './components/ui/tabs';
+import { ArchitectureOverview } from './components/ArchitectureOverview';
+import { DatabaseSchema } from './components/DatabaseSchema';
+import { UserJourney } from './components/UserJourney';
+import { APIStrategy } from './components/APIStrategy';
+import { LiveDemo } from './components/LiveDemo';
 import { FileText, Database, GitBranch, Workflow, Code } from 'lucide-react';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState('overview');
+  // Ho impostato 'demo' così vedi subito la grafica di Figma
+  const [activeTab, setActiveTab] = useState('demo');
 
   return (
     <div className="min-h-screen bg-slate-50">

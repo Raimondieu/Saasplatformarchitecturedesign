@@ -48,6 +48,13 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
   const loadProjects = async () => {
     if (!user) { setAvailableProjects([]); setLoadingProjects(false); return; }
     setLoadingProjects(true);
+
+    // Safety timeout: sblocca dopo 8 secondi se la query si blocca
+    const safetyTimer = setTimeout(() => {
+      console.warn('Safety timeout: sblocco loadingProjects dopo 8s');
+      setLoadingProjects(false);
+    }, 8000);
+
     try {
       let projects: ProjectWithOrg[] = [];
 
@@ -57,6 +64,7 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
           .from('projects')
           .select('*, organizations(name, sector)')
           .order('reporting_year', { ascending: false });
+        console.log('Admin projects query:', { data, error });
         if (!error && data) {
           projects = data.map((p: any) => ({
             ...p,
@@ -70,6 +78,7 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
           .from('project_members')
           .select('role, project_id, projects(*, organizations(name, sector))')
           .eq('user_id', user.id);
+        console.log('Member projects query:', { data, error });
         if (!error && data) {
           projects = data
             .filter((pm: any) => pm.projects)
@@ -98,6 +107,7 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
     } catch (err) {
       console.error('Errore caricamento progetti:', err);
     } finally {
+      clearTimeout(safetyTimer);
       setLoadingProjects(false);
     }
   };

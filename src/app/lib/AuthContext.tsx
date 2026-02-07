@@ -1,5 +1,5 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
-import { supabase } from './supabase';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import { supabase, getSupabaseConfig } from './supabase';
 import type { User, Session } from '@supabase/supabase-js';
 
 export type UserRole = 'Admin' | 'DataCollector' | 'Reviewer';
@@ -22,151 +22,186 @@ interface AuthContextType {
   signIn: (email: string, password: string) => Promise<{ error: string | null }>;
   signUp: (email: string, password: string, fullName?: string) => Promise<{ error: string | null }>;
   signOut: () => Promise<void>;
+  refreshProfile: () => Promise<boolean>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<T>((resolve) => setTimeout(() => {
-      console.warn('Timeout raggiunto, uso fallback');
-      resolve(fallback);
-    }, ms))
-  ]);
+const CACHE_KEY = 'esrs_profile';
+
+// =====================================================
+// Fetch profilo via REST puro (NESSUN AbortSignal, NESSUN client Supabase)
+// =====================================================
+async function fetchProfileREST(accessToken: string, userId: string): Promise<UserProfile | null> {
+  const { url, anonKey } = getSupabaseConfig();
+  const headers = {
+    apikey: anonKey,
+    Authorization: `Bearer ${accessToken}`,
+    'Content-Type': 'application/json',
+  };
+
+  // Tentativo 1: RPC get_my_profile
+  try {
+    const r = await fetch(`${url}/rest/v1/rpc/get_my_profile`, { method: 'POST', headers, body: '{}' });
+    if (r.ok) {
+      const d = await r.json();
+      if (d && d.id) return toProfile(d);
+    }
+  } catch (_) {}
+
+  // Tentativo 2: GET profiles
+  try {
+    const r = await fetch(`${url}/rest/v1/profiles?id=eq.${userId}&select=*`, { headers: { ...headers, Accept: 'application/json' }, method: 'GET' });
+    if (r.ok) {
+      const arr = await r.json();
+      if (Array.isArray(arr) && arr[0]) return toProfile(arr[0]);
+    }
+  } catch (_) {}
+
+  return null;
 }
 
+function toProfile(p: any): UserProfile {
+  return {
+    id: p.id,
+    email: p.email || '',
+    full_name: p.full_name || null,
+    global_role: (p.global_role || p.role || 'DataCollector') as UserRole,
+    created_at: p.created_at || '',
+  };
+}
+
+function saveCache(userId: string, p: UserProfile) {
+  try { sessionStorage.setItem(CACHE_KEY, JSON.stringify({ uid: userId, p, t: Date.now() })); } catch (_) {}
+}
+function loadCache(userId: string): UserProfile | null {
+  try {
+    const raw = sessionStorage.getItem(CACHE_KEY);
+    if (!raw) return null;
+    const { uid, p, t } = JSON.parse(raw);
+    if (uid !== userId || Date.now() - t > 300000) return null; // 5 min TTL
+    return p;
+  } catch { return null; }
+}
+function clearCache() {
+  try { sessionStorage.removeItem(CACHE_KEY); } catch (_) {}
+}
+
+// =====================================================
+// Provider
+// =====================================================
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const fetchProfile = async (userId: string): Promise<UserProfile | null> => {
-    console.log('fetchProfile per userId:', userId);
-    try {
-      // METODO 1: RPC get_my_profile (bypassa RLS, no ricorsione)
-      const rpcResult = await withTimeout(
-        supabase.rpc('get_my_profile'),
-        5000,
-        { data: null, error: { message: 'Timeout RPC' } } as any
-      );
-      console.log('RPC get_my_profile result:', JSON.stringify(rpcResult));
+  // Carica profilo: usa cache subito, poi aggiorna in background
+  const loadProfile = useCallback(async (s: Session) => {
+    const uid = s.user.id;
 
-      if (rpcResult.data && !rpcResult.error) {
-        const p = rpcResult.data as any;
-        console.log('Profilo via RPC:', p);
-        return {
-          id: p.id,
-          email: p.email,
-          full_name: p.full_name,
-          global_role: p.global_role || p.role || 'DataCollector',
-          created_at: p.created_at,
-        };
-      }
+    // Cache immediata
+    const cached = loadCache(uid);
+    if (cached) setProfile(cached);
 
-      // METODO 2: Fallback query diretta (potrebbe fallire per RLS)
-      console.log('RPC fallita, provo query diretta...');
-      const queryResult = await withTimeout(
-        supabase.from('profiles').select('*').eq('id', userId).single(),
-        5000,
-        { data: null, error: { message: 'Timeout query' } } as any
-      );
-      console.log('Query diretta result:', JSON.stringify(queryResult));
-
-      if (queryResult.data && !queryResult.error) {
-        const p = queryResult.data as any;
-        return {
-          id: p.id,
-          email: p.email,
-          full_name: p.full_name,
-          global_role: p.global_role || p.role || 'DataCollector',
-          created_at: p.created_at,
-        };
-      }
-
-      // METODO 3: Fallback minimo con i dati dell'auth user
-      console.warn('Entrambi i metodi falliti, uso dati auth come fallback');
-      const { data: { user: authUser } } = await supabase.auth.getUser();
-      if (authUser) {
-        return {
-          id: authUser.id,
-          email: authUser.email || '',
-          full_name: authUser.user_metadata?.full_name || null,
-          global_role: 'DataCollector', // fallback sicuro
-          created_at: authUser.created_at || '',
-        };
-      }
-
-      return null;
-    } catch (err) {
-      console.error('Errore imprevisto profilo:', err);
-      return null;
+    // Fetch da rete
+    const fresh = await fetchProfileREST(s.access_token, uid);
+    if (fresh) {
+      setProfile(fresh);
+      saveCache(uid, fresh);
+    } else if (!cached) {
+      // Se nessun profilo e nessuna cache, usiamo i dati minimi dell'auth user
+      setProfile({
+        id: uid,
+        email: s.user.email || '',
+        full_name: s.user.user_metadata?.full_name || null,
+        global_role: 'DataCollector',
+        created_at: s.user.created_at || '',
+      });
     }
-  };
-
-  useEffect(() => {
-    let mounted = true;
-    const initAuth = async () => {
-      try {
-        const { data: { session: s } } = await supabase.auth.getSession();
-        if (!mounted) return;
-        if (s?.user) {
-          setSession(s); setUser(s.user);
-          const p = await fetchProfile(s.user.id);
-          if (mounted) setProfile(p);
-        }
-      } catch (err) { console.error('Errore init auth:', err); }
-      finally { if (mounted) setLoading(false); }
-    };
-    const safety = setTimeout(() => { if (mounted) setLoading(false); }, 8000);
-    initAuth();
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, ns) => {
-      if (!mounted) return;
-      setSession(ns); setUser(ns?.user ?? null);
-      if (ns?.user) { const p = await fetchProfile(ns.user.id); if (mounted) setProfile(p); }
-      else setProfile(null);
-    });
-    return () => { mounted = false; clearTimeout(safety); subscription.unsubscribe(); };
   }, []);
 
-  const signIn = async (email: string, password: string) => {
-    try {
-      const { error } = await supabase.auth.signInWithPassword({ email, password });
-      if (error) {
-        if (error.message.includes('Invalid login credentials')) return { error: 'Email o password non corretti.' };
-        if (error.message.includes('Email not confirmed')) return { error: 'Email non ancora confermata.' };
-        return { error: error.message };
+  useEffect(() => {
+    let active = true;
+
+    // 1. Leggi sessione
+    supabase.auth.getSession().then(({ data: { session: s } }) => {
+      if (!active) return;
+      if (s) {
+        setSession(s);
+        setUser(s.user);
+        loadProfile(s).finally(() => { if (active) setLoading(false); });
+      } else {
+        setLoading(false);
       }
-      return { error: null };
-    } catch (err: any) { return { error: err.message || 'Errore imprevisto.' }; }
+    });
+
+    // 2. Ascolta cambi di stato auth
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_ev, s) => {
+      if (!active) return;
+      setSession(s);
+      setUser(s?.user ?? null);
+      if (s) {
+        loadProfile(s).finally(() => { if (active) setLoading(false); });
+      } else {
+        setProfile(null);
+        clearCache();
+        setLoading(false);
+      }
+    });
+
+    // Safety: dopo 4 secondi sblocca sempre
+    const t = setTimeout(() => { if (active) setLoading(false); }, 4000);
+
+    return () => { active = false; clearTimeout(t); subscription.unsubscribe(); };
+  }, [loadProfile]);
+
+  // ---- Azioni ----
+
+  const signIn = async (email: string, password: string) => {
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) {
+      if (error.message.includes('Invalid login')) return { error: 'Email o password non corretti.' };
+      if (error.message.includes('Email not confirmed')) return { error: 'Email non ancora confermata.' };
+      return { error: error.message };
+    }
+    return { error: null };
   };
 
   const signUp = async (email: string, password: string, fullName?: string) => {
-    try {
-      const { data, error } = await supabase.auth.signUp({ email, password, options: { data: { full_name: fullName || '' } } });
-      if (error) {
-        if (error.message.includes('already registered')) return { error: 'Email gia registrata.' };
-        if (error.message.includes('password')) return { error: 'Password: almeno 6 caratteri.' };
-        return { error: error.message };
-      }
-      return { error: null };
-    } catch (err: any) { return { error: err.message || 'Errore imprevisto.' }; }
+    const { error } = await supabase.auth.signUp({ email, password, options: { data: { full_name: fullName || '' } } });
+    if (error) return { error: error.message };
+    return { error: null };
   };
 
   const signOut = async () => {
+    clearCache();
+    setUser(null);
+    setSession(null);
+    setProfile(null);
     await supabase.auth.signOut();
-    setUser(null); setSession(null); setProfile(null);
+    // Forza un reload pulito
+    window.location.href = window.location.origin;
+  };
+
+  const refreshProfile = async (): Promise<boolean> => {
+    if (!session) return false;
+    const p = await fetchProfileREST(session.access_token, session.user.id);
+    if (p) {
+      setProfile(p);
+      saveCache(session.user.id, p);
+      return true;
+    }
+    return false;
   };
 
   const globalRole = profile?.global_role ?? null;
 
   return (
     <AuthContext.Provider value={{
-      user, session, profile,
-      globalRole,
+      user, session, profile, globalRole,
       isGlobalAdmin: globalRole === 'Admin',
-      loading, signIn, signUp, signOut,
+      loading, signIn, signUp, signOut, refreshProfile,
     }}>
       {children}
     </AuthContext.Provider>
@@ -174,7 +209,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 }
 
 export function useAuth() {
-  const context = useContext(AuthContext);
-  if (!context) throw new Error('useAuth deve essere usato dentro un <AuthProvider>');
-  return context;
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error('useAuth fuori da AuthProvider');
+  return ctx;
 }

@@ -1,18 +1,84 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useProject, type ProjectWithOrg } from '../lib/ProjectContext';
 import { useAuth } from '../lib/AuthContext';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from './ui/card';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
-import { Loader2, Building2, Calendar, FolderOpen, Settings, LogOut } from 'lucide-react';
+import { Loader2, Building2, Calendar, FolderOpen, Settings, LogOut, RefreshCw } from 'lucide-react';
 
 interface ProjectPickerProps {
   onAdminPanel?: () => void;
 }
 
 export function ProjectPicker({ onAdminPanel }: ProjectPickerProps) {
-  const { isGlobalAdmin, profile, user, signOut } = useAuth();
-  const { availableProjects, loadingProjects, selectProject } = useProject();
+  const { isGlobalAdmin, profile, user, signOut, refreshProfile } = useAuth();
+  const { availableProjects, loadingProjects, selectProject, reloadProjects } = useProject();
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshError, setRefreshError] = useState(false);
+  const [reloadingProjects, setReloadingProjects] = useState(false);
+
+  const handleRefreshProfile = async () => {
+    setRefreshing(true);
+    setRefreshError(false);
+    try {
+      const ok = await refreshProfile();
+      if (ok) window.location.reload();
+      else setRefreshError(true);
+    } catch {
+      setRefreshError(true);
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  const handleReloadProjects = async () => {
+    setReloadingProjects(true);
+    await reloadProjects();
+    setReloadingProjects(false);
+  };
+
+  if (loadingProjects && !user) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <div className="text-center space-y-4">
+          <Loader2 className="animate-spin h-10 w-10 text-blue-600 mx-auto" />
+          <p className="text-slate-500 text-sm">Caricamento...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Profilo non caricato: card evidente e azioni chiare
+  if (user && !profile) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
+        <Card className="max-w-md w-full border-amber-200 bg-amber-50/50">
+          <CardHeader>
+            <CardTitle className="text-lg">Profilo non caricato</CardTitle>
+            <CardDescription>
+              I tuoi permessi e progetti non sono stati caricati. Usa uno dei pulsanti sotto per riprovare o riaccedere.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <Button
+              className="w-full gap-2"
+              onClick={handleRefreshProfile}
+              disabled={refreshing}
+            >
+              {refreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+              {refreshing ? 'Caricamento...' : 'Ricarica profilo e permessi'}
+            </Button>
+            <Button variant="outline" className="w-full gap-2" onClick={signOut}>
+              <LogOut className="h-4 w-4" /> Esci e riaccedi
+            </Button>
+            {refreshError && (
+              <p className="text-sm text-amber-700 text-center">Riprova o esci e fai di nuovo login.</p>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   if (loadingProjects) {
     return (
@@ -20,6 +86,7 @@ export function ProjectPicker({ onAdminPanel }: ProjectPickerProps) {
         <div className="text-center space-y-4">
           <Loader2 className="animate-spin h-10 w-10 text-blue-600 mx-auto" />
           <p className="text-slate-500 text-sm">Caricamento progetti...</p>
+          <p className="text-xs text-slate-400">Attendi al massimo qualche secondo.</p>
         </div>
       </div>
     );
@@ -43,7 +110,9 @@ export function ProjectPicker({ onAdminPanel }: ProjectPickerProps) {
         <div className="text-center mb-8">
           <h1 className="text-3xl font-bold text-slate-900 tracking-tight">ESRS Compliance Platform</h1>
           <p className="text-slate-500 mt-2">
-            Benvenuto, <strong>{profile?.full_name || profile?.email || user?.email || 'Utente'}</strong>.
+            Benvenuto, <strong>
+              {profile?.full_name || (user as any)?.user_metadata?.full_name || profile?.email || user?.email || 'Utente'}
+            </strong>.
             {profile?.global_role && <span className="ml-2 text-xs bg-slate-100 px-2 py-0.5 rounded">{profile.global_role}</span>}
           </p>
           <p className="text-slate-400 text-sm mt-1">Seleziona un progetto di rendicontazione.</p>
@@ -69,10 +138,20 @@ export function ProjectPicker({ onAdminPanel }: ProjectPickerProps) {
               <FolderOpen className="h-12 w-12 text-slate-300 mx-auto mb-4" />
               <p className="text-slate-500 mb-2">Nessun progetto disponibile.</p>
               {isGlobalAdmin ? (
-                <p className="text-sm text-slate-400">Vai al Pannello Amministrazione per creare organizzazioni e progetti.</p>
+                <p className="text-sm text-slate-400 mb-4">Vai al Pannello Amministrazione per creare organizzazioni e progetti.</p>
               ) : (
-                <p className="text-sm text-slate-400">Contatta un amministratore per essere assegnato a un progetto.</p>
+                <p className="text-sm text-slate-400 mb-4">Contatta un amministratore per essere assegnato a un progetto.</p>
               )}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleReloadProjects}
+                disabled={reloadingProjects}
+                className="gap-2"
+              >
+                {reloadingProjects ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                Ricarica progetti
+              </Button>
             </CardContent>
           </Card>
         )}

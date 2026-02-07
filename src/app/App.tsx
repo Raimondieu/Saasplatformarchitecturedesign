@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './components/ui/tabs';
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from './components/ui/sheet';
+import { ScrollArea } from './components/ui/scroll-area';
 import { ArchitectureOverview } from './components/ArchitectureOverview';
 import { DatabaseSchema } from './components/DatabaseSchema';
 import { UserJourney } from './components/UserJourney';
@@ -12,7 +14,7 @@ import { AuthProvider, useAuth } from './lib/AuthContext';
 import { ProjectProvider, useProject } from './lib/ProjectContext';
 import { Badge } from './components/ui/badge';
 import { Button } from './components/ui/button';
-import { FileText, Database, GitBranch, Workflow, Code, LogOut, Loader2, User, Building2, Calendar, ArrowLeft, Settings } from 'lucide-react';
+import { FileText, Database, GitBranch, Workflow, Code, LogOut, Loader2, User, Building2, Calendar, ArrowLeft, Settings, BookOpen } from 'lucide-react';
 
 const ROLE_LABELS: Record<string, { label: string; color: string }> = {
   Admin: { label: 'Admin', color: 'bg-purple-100 text-purple-700 border-purple-200' },
@@ -25,6 +27,7 @@ function AppContent() {
   const { currentProject, projectRole, clearProject } = useProject();
   const [activeTab, setActiveTab] = useState('demo');
   const [showAdminPanel, setShowAdminPanel] = useState(false);
+  const [docPanel, setDocPanel] = useState<'overview' | 'database' | 'api' | null>(null);
 
   if (loading) {
     return (
@@ -51,7 +54,7 @@ function AppContent() {
               </Button>
             </div>
             <div className="flex items-center gap-3">
-              <span className="text-sm text-slate-500">{profile?.full_name || user.email}</span>
+              <span className="text-sm text-slate-500">{profile?.full_name || (user as any)?.user_metadata?.full_name || user.email}</span>
               <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-slate-400 hover:text-red-600" onClick={signOut} title="Esci">
                 <LogOut className="h-4 w-4" />
               </Button>
@@ -114,7 +117,7 @@ function AppContent() {
                 <User className="h-3.5 w-3.5 text-slate-400" />
                 <div className="text-right">
                   <p className="text-xs font-medium text-slate-700 truncate max-w-[140px]">
-                    {profile?.full_name || user.email}
+                    {profile?.full_name || (user as any)?.user_metadata?.full_name || user.email}
                   </p>
                   <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${roleInfo.color}`}>
                     {roleInfo.label}
@@ -129,38 +132,80 @@ function AppContent() {
         </div>
       </header>
 
-      <div className="max-w-7xl mx-auto px-6 py-8">
-        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-          <TabsList className="grid w-full grid-cols-5 bg-white p-1 rounded-lg shadow-sm border border-slate-200">
-            <TabsTrigger value="overview" className="flex items-center gap-2">
-              <FileText className="h-4 w-4" />
-              <span className="hidden sm:inline">Architecture</span>
-            </TabsTrigger>
-            <TabsTrigger value="database" className="flex items-center gap-2">
-              <Database className="h-4 w-4" />
-              <span className="hidden sm:inline">Database Schema</span>
-            </TabsTrigger>
-            <TabsTrigger value="api" className="flex items-center gap-2">
-              <Code className="h-4 w-4" />
-              <span className="hidden sm:inline">API Strategy</span>
-            </TabsTrigger>
-            <TabsTrigger value="journey" className="flex items-center gap-2">
-              <GitBranch className="h-4 w-4" />
-              <span className="hidden sm:inline">User Journey</span>
-            </TabsTrigger>
-            <TabsTrigger value="demo" className="flex items-center gap-2">
-              <Workflow className="h-4 w-4" />
-              <span className="hidden sm:inline">Live Demo</span>
-            </TabsTrigger>
-          </TabsList>
+      <div className="flex min-h-[calc(100vh-4rem)]">
+        {/* Sidebar: documentazione (Architecture, Database, API) */}
+        <aside className="w-52 shrink-0 border-r border-slate-200 bg-white py-6 pl-4 pr-2">
+          <p className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-3 flex items-center gap-2">
+            <BookOpen className="h-3.5 w-3.5" /> Documentazione
+          </p>
+          <nav className="space-y-0.5">
+            <Button
+              variant={docPanel === 'overview' ? 'secondary' : 'ghost'}
+              size="sm"
+              className="w-full justify-start gap-2 font-normal"
+              onClick={() => setDocPanel('overview')}
+            >
+              <FileText className="h-4 w-4 shrink-0" />
+              Architecture
+            </Button>
+            <Button
+              variant={docPanel === 'database' ? 'secondary' : 'ghost'}
+              size="sm"
+              className="w-full justify-start gap-2 font-normal"
+              onClick={() => setDocPanel('database')}
+            >
+              <Database className="h-4 w-4 shrink-0" />
+              Database Schema
+            </Button>
+            <Button
+              variant={docPanel === 'api' ? 'secondary' : 'ghost'}
+              size="sm"
+              className="w-full justify-start gap-2 font-normal"
+              onClick={() => setDocPanel('api')}
+            >
+              <Code className="h-4 w-4 shrink-0" />
+              API Strategy
+            </Button>
+          </nav>
+        </aside>
 
-          <TabsContent value="overview" className="mt-6"><ArchitectureOverview /></TabsContent>
-          <TabsContent value="database" className="mt-6"><DatabaseSchema /></TabsContent>
-          <TabsContent value="api" className="mt-6"><APIStrategy /></TabsContent>
-          <TabsContent value="journey" className="mt-6"><UserJourney /></TabsContent>
-          <TabsContent value="demo" className="mt-6"><LiveDemo /></TabsContent>
-        </Tabs>
+        {/* Contenuto centrale: solo User Journey e Live Demo */}
+        <main className="flex-1 min-w-0 px-6 py-8">
+          <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
+            <TabsList className="grid w-full max-w-md grid-cols-2 bg-white p-1 rounded-lg shadow-sm border border-slate-200">
+              <TabsTrigger value="journey" className="flex items-center gap-2">
+                <GitBranch className="h-4 w-4" />
+                User Journey
+              </TabsTrigger>
+              <TabsTrigger value="demo" className="flex items-center gap-2">
+                <Workflow className="h-4 w-4" />
+                Live Demo
+              </TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="journey" className="mt-6"><UserJourney /></TabsContent>
+            <TabsContent value="demo" className="mt-6"><LiveDemo /></TabsContent>
+          </Tabs>
+        </main>
       </div>
+
+      {/* Pannello laterale destro: documentazione selezionata */}
+      <Sheet open={docPanel !== null} onOpenChange={(open) => !open && setDocPanel(null)}>
+        <SheetContent side="right" className="w-full sm:max-w-2xl overflow-hidden flex flex-col p-0">
+          <SheetHeader className="px-6 py-4 border-b border-slate-200 shrink-0">
+            <SheetTitle>
+              {docPanel === 'overview' && 'Architecture'}
+              {docPanel === 'database' && 'Database Schema'}
+              {docPanel === 'api' && 'API Strategy'}
+            </SheetTitle>
+          </SheetHeader>
+          <ScrollArea className="flex-1 px-6 py-4">
+            {docPanel === 'overview' && <ArchitectureOverview />}
+            {docPanel === 'database' && <DatabaseSchema />}
+            {docPanel === 'api' && <APIStrategy />}
+          </ScrollArea>
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }
